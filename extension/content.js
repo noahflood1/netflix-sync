@@ -2,7 +2,8 @@
 // Hooks into the video player to sync playback
 
 let videoElement = null;
-let isRemoteAction = false; // Flag to prevent infinite loops
+let ignoreNextEvent = { pause: false, play: false }; // Prevent infinite loops
+let syncInProgress = false;
 
 // Find the Netflix video element
 function findVideoElement() {
@@ -26,8 +27,14 @@ function attachVideoListeners() {
 
 // Handle local pause event
 function handlePause() {
-  if (isRemoteAction) {
-    isRemoteAction = false;
+  if (ignoreNextEvent.pause) {
+    console.log('[Netflix Sync] Ignoring pause event (remote triggered)');
+    ignoreNextEvent.pause = false;
+    return;
+  }
+
+  if (syncInProgress) {
+    console.log('[Netflix Sync] Sync in progress, ignoring local pause');
     return;
   }
 
@@ -44,8 +51,14 @@ function handlePause() {
 
 // Handle local play event
 function handlePlay() {
-  if (isRemoteAction) {
-    isRemoteAction = false;
+  if (ignoreNextEvent.play) {
+    console.log('[Netflix Sync] Ignoring play event (remote triggered)');
+    ignoreNextEvent.play = false;
+    return;
+  }
+
+  if (syncInProgress) {
+    console.log('[Netflix Sync] Sync in progress, ignoring local play');
     return;
   }
 
@@ -74,12 +87,25 @@ function handleRemoteSync(message) {
     return;
   }
 
-  isRemoteAction = true;
-
+  syncInProgress = true;
   console.log('[Netflix Sync] Remote sync:', message.action, 'at', message.timestamp);
 
+  // Set flag to ignore the event we're about to trigger
+  if (message.action === 'pause') {
+    ignoreNextEvent.pause = true;
+  } else if (message.action === 'play') {
+    ignoreNextEvent.play = true;
+  }
+
   // Sync timestamp first
-  videoElement.currentTime = message.timestamp;
+  const currentTime = videoElement.currentTime;
+  const timeDiff = Math.abs(currentTime - message.timestamp);
+
+  // Only seek if there's a significant difference (more than 0.5 seconds)
+  if (timeDiff > 0.5) {
+    console.log(`[Netflix Sync] Seeking from ${currentTime} to ${message.timestamp}`);
+    videoElement.currentTime = message.timestamp;
+  }
 
   // Then perform action
   if (message.action === 'pause') {
@@ -91,6 +117,11 @@ function handleRemoteSync(message) {
       // This might fail if user hasn't interacted with the page
     });
   }
+
+  // Clear sync flag after a short delay
+  setTimeout(() => {
+    syncInProgress = false;
+  }, 500);
 }
 
 // Wait for video element to load

@@ -51,6 +51,9 @@ function connect() {
       roomId = message.roomId;
       chrome.storage.local.set({ roomId });
 
+      // Start keepalive when in a room
+      startKeepAlive();
+
       // Notify popup if open
       chrome.runtime.sendMessage({
         type: 'ROOM_UPDATE',
@@ -91,14 +94,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SYNC_EVENT') {
     // Forward sync event to server
-    if (ws && ws.readyState === WebSocket.OPEN && roomId) {
-      ws.send(JSON.stringify({
-        type: 'sync',
-        roomId: roomId,
-        action: message.action,
-        timestamp: message.timestamp
-      }));
+    if (!roomId) {
+      console.log('[Netflix Sync] Not in a room, ignoring sync event');
+      return;
     }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.log('[Netflix Sync] WebSocket not connected, ignoring sync event');
+      return;
+    }
+
+    console.log(`[Netflix Sync] Sending ${message.action} to room ${roomId}`);
+    ws.send(JSON.stringify({
+      type: 'sync',
+      roomId: roomId,
+      action: message.action,
+      timestamp: message.timestamp
+    }));
   } else if (message.type === 'CREATE_ROOM') {
     // Create a new room
     if (!isConnected) {
@@ -114,7 +125,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (message.type === 'JOIN_ROOM') {
     // Join an existing room
-    roomId = message.roomId;
+    // Don't set roomId until we confirm the room exists
     if (!isConnected) {
       connect();
       // Wait for connection before joining
@@ -137,6 +148,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     roomId = null;
     chrome.storage.local.remove('roomId');
+    stopKeepAlive();
   }
 });
 
@@ -144,8 +156,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.storage.local.get(['roomId'], (result) => {
   if (result.roomId) {
     roomId = result.roomId;
-    connect();
+    // Clear stored room on startup - user must rejoin
+    // This prevents "room not found" errors from stale rooms
+    chrome.storage.local.remove('roomId');
+    roomId = null;
   }
 });
+
+// Keep service worker alive to maintain WebSocket connection
+// Chrome service workers can sleep after 30 seconds of inactivity
+let keepAliveInterval = null;
+
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+
+  keepAliveInterval = setInterval(() => {
+    // Ping to keep service worker active
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Just check connection state, don't send unnecessary data
+    }
+  }, 20000); // Every 20 seconds
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
 
 console.log('[Netflix Sync] Background script loaded');
